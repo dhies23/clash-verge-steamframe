@@ -51,6 +51,9 @@ jobs:
 
       - name: 打包
         run: |
+          # 完整文档只有一份，放在仓库根 README.md；这里复制进去随包分发，
+          # 避免仓库里存在两份同样内容、改一份忘一份。
+          cp README.md steam-frame/README.md
           tar -czf clash-verge-steam-frame-installer.tar.gz \
             steam-frame/install-clash-verge-frame.sh \
             steam-frame/README.md \
