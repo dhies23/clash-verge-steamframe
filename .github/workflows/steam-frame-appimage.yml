@@ -179,3 +179,114 @@ jobs:
           files: |
             out/*.AppImage
             out/SHA256SUMS-appimage.txt
+
+  # ---------------------------------------------------------------- Windows 管理器
+  # 管理器是 C# WinForms 程序，只能在 Windows 上编译，Linux 作业产不出它。
+  windows-manager:
+    name: 编译 Windows 图形界面管理器
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: 定位 Roslyn 编译器
+        id: csc
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          if (-not (Test-Path $vswhere)) { throw "找不到 vswhere.exe" }
+          $vs = & $vswhere -latest -products * -requires Microsoft.Component.MSBuild -property installationPath
+          if (-not $vs) { throw "找不到 Visual Studio 安装" }
+          $csc = Join-Path $vs "MSBuild\Current\Bin\Roslyn\csc.exe"
+          if (-not (Test-Path $csc)) { throw "找不到 csc.exe：$csc" }
+          "path=$csc" >> $env:GITHUB_OUTPUT
+          & $csc /version
+
+      - name: 编译 askpass（必须是控制台子系统）
+        shell: pwsh
+        working-directory: steam-frame
+        run: |
+          $csc = "${{ steps.csc.outputs.path }}"
+          & $csc /nologo /codepage:65001 /platform:anycpu /target:exe /out:askpass.exe askpass.cs
+          if ($LASTEXITCODE -ne 0) { throw "askpass.exe 编译失败" }
+          Write-Host "askpass.exe = $((Get-Item askpass.exe).Length) 字节"
+
+      - name: 编译管理器（GUI + CLI 两个版本）
+        shell: pwsh
+        working-directory: steam-frame
+        run: |
+          $csc = "${{ steps.csc.outputs.path }}"
+          $refs = @(
+            '/r:System.dll', '/r:System.Core.dll', '/r:System.Drawing.dll',
+            '/r:System.Windows.Forms.dll', '/r:System.Net.Http.dll', '/r:System.Security.dll'
+          )
+          # 四个资源少一个都会在运行时报「内置资源缺失」
+          $res = @(
+            '/resource:push-subscription.py', '/resource:askpass.exe',
+            '/resource:steam-shortcuts.py', '/resource:uninstall-clash-verge-frame.sh'
+          )
+          $targets = @(
+            @{ kind = 'winexe'; out = 'ClashVergeFrameManager.exe' },
+            @{ kind = 'exe';    out = 'cvframe-cli.exe' }
+          )
+          foreach ($t in $targets) {
+            & $csc /nologo /codepage:65001 /platform:anycpu "/target:$($t.kind)" @refs @res "/out:$($t.out)" manager.cs
+            if ($LASTEXITCODE -ne 0) { throw "$($t.out) 编译失败" }
+            Write-Host "$($t.out) = $((Get-Item $t.out).Length) 字节"
+          }
+
+      - name: 校验四个资源确实内嵌进去了
+        shell: pwsh
+        working-directory: steam-frame
+        run: |
+          # 编译成功只说明文件存在，不代表打进去了；直接在二进制里找资源名。
+          # （不用 Assembly.LoadFile：pwsh 跑在 .NET Core 上，加载 .NET Framework
+          #   的 WinForms 程序集可能失败。）
+          # 注意：读不到文件必须当失败处理 —— 否则路径写错时会"空数组 = 没缺"，
+          # 校验变成永远通过，等于没有。
+          $want = @('push-subscription.py','askpass.exe','steam-shortcuts.py','uninstall-clash-verge-frame.sh')
+          $failed = $false
+          foreach ($name in @('ClashVergeFrameManager.exe','cvframe-cli.exe')) {
+            $p = (Resolve-Path $name -ErrorAction SilentlyContinue)
+            if (-not $p) { Write-Host "::error::$name 不存在"; $failed = $true; continue }
+            $bytes = [System.IO.File]::ReadAllBytes($p.Path)
+            if ($bytes.Length -eq 0) { Write-Host "::error::$name 是空文件"; $failed = $true; continue }
+            $text = [System.Text.Encoding]::UTF8.GetString($bytes)
+            $miss = @($want | Where-Object { -not $text.Contains($_) })
+            if ($miss.Count -gt 0) {
+              Write-Host "::error::$name 缺少内嵌资源: $($miss -join ', ')"
+              $failed = $true
+            } else {
+              Write-Host "$name ($($bytes.Length) 字节) 的四个资源都在"
+            }
+          }
+          if ($failed) { throw "资源内嵌校验未通过" }
+
+      - name: 生成校验和
+        shell: pwsh
+        working-directory: steam-frame
+        run: |
+          $lines = foreach ($f in @('ClashVergeFrameManager.exe','cvframe-cli.exe')) {
+            "$((Get-FileHash $f -Algorithm SHA256).Hash.ToLower())  $f"
+          }
+          Set-Content -Path SHA256SUMS-windows.txt -Value $lines -Encoding ascii
+          Get-Content SHA256SUMS-windows.txt
+
+      - name: 上传产物
+        uses: actions/upload-artifact@v7
+        with:
+          name: clash-verge-steam-frame-windows-manager
+          path: |
+            steam-frame/ClashVergeFrameManager.exe
+            steam-frame/cvframe-cli.exe
+            steam-frame/SHA256SUMS-windows.txt
+          if-no-files-found: error
+
+      - name: 追加到 Release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: steam-frame-latest
+          files: |
+            steam-frame/ClashVergeFrameManager.exe
+            steam-frame/cvframe-cli.exe
+            steam-frame/SHA256SUMS-windows.txt

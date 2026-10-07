@@ -16,12 +16,18 @@
 //   * 使用独立的 known_hosts 与 ssh 配置，不污染用户自己的 ~/.ssh/config；
 //     遇到「主机密钥已变更」会自动清除本地记录并重试（重装系统的典型场景）。
 //
-// 编译（Roslyn）：
-//   csc /nologo /codepage:65001 /target:winexe /platform:anycpu ^
-//       /r:System.dll /r:System.Core.dll /r:System.Drawing.dll ^
-//       /r:System.Windows.Forms.dll /r:System.Net.Http.dll /r:System.Security.dll ^
-//       /resource:push-subscription.py ^
-//       /out:ClashVergeFrameManager.exe manager.cs
+// 编译（Roslyn；askpass 要先编译出来，主程序把它作为资源内嵌）：
+//   1) csc /nologo /codepage:65001 /platform:anycpu /target:exe ^
+//          /out:askpass.exe askpass.cs
+//   2) csc /nologo /codepage:65001 /platform:anycpu /target:winexe ^
+//          /r:System.dll /r:System.Core.dll /r:System.Drawing.dll ^
+//          /r:System.Windows.Forms.dll /r:System.Net.Http.dll /r:System.Security.dll ^
+//          /resource:push-subscription.py /resource:askpass.exe ^
+//          /resource:steam-shortcuts.py /resource:uninstall-clash-verge-frame.sh ^
+//          /out:ClashVergeFrameManager.exe manager.cs
+//      把 /target:winexe 换成 /target:exe、输出改名 cvframe-cli.exe，即为命令行版。
+//      四个 /resource 少一个都会在运行时报「内置资源缺失」。
+//      CI 见 .github/workflows/steam-frame-appimage.yml 的 windows-manager 作业。
 
 using System;
 using System.Collections.Generic;
