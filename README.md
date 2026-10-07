@@ -1,7 +1,7 @@
 # Clash Verge Rev × Steam Frame 适配
 
 把 [clash-verge-rev](https://github.com/clash-verge-rev/clash-verge-rev) 适配到 Valve **Steam Frame**
-（Qualcomm Snapdragon 8 Gen 3 / **AArch64** / **SteamOS**），并给出真机验证过的一键安装方案。
+（Qualcomm Snapdragon 8 Gen 3 / **AArch64** / **SteamOS**），并给出真机验证过的一键安装方案。直接使用 zip压缩包的程序即可
 
 > **本仓库是 [clash-verge-rev](https://github.com/clash-verge-rev/clash-verge-rev) 的 Steam Frame 适配分支。**
 > 上游代码保持原样，适配内容全部集中在 [steam-frame/](./steam-frame) 目录下，与上游路径不重叠，
