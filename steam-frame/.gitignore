@@ -1,0 +1,15 @@
+# 编译产物与运行时数据不进仓库。
+# 发布用的安装包走 GitHub Releases（见 .github/workflows/steam-frame-appimage.yml），
+# 不要直接提交进 git —— 单个 .run 就有 120 MB，超过 GitHub 的 100 MB 文件上限。
+*.exe
+*.run
+*.dll
+*.pdb
+*.tar.gz
+*.AppImage
+
+# 管理器运行时会在自己的数据目录里放密钥、known_hosts 与加密凭据
+cvframe-data/
+cvframe-helper.py
+debug.log
+*.log

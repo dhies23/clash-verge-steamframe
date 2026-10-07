@@ -1,0 +1,178 @@
+name: Steam Frame 安装包
+
+# 为 Valve Steam Frame（Snapdragon 8 Gen 3 / AArch64 / SteamOS）构建可导入机器的安装包。
+#
+# 两个产物：
+#   1) clash-verge-steam-frame-installer.tar.gz
+#      推荐路径。含一键安装器 + 托盘库（SteamOS 仓库和 AUR 都没有 libayatana-appindicator，
+#      从 Ubuntu arm64 取现成的 .so 一起打包，安装器直接落位，目标机无需编译）。
+#   2) Clash.Verge_*_aarch64.AppImage
+#      上游 tauri.linux.conf.json 把 bundle.targets 写死为 ["deb","rpm"]，官方 release 不产
+#      AppImage。这里用 --config 覆盖后自行构建。
+#      注意：AppImage 无法自带 WebKit —— WebKitGTK 的辅助进程路径 /usr/lib/webkit2gtk-4.1
+#      是编译期硬编码且不支持 WEBKIT_EXEC_PATH，所以仍然需要系统提供 webkit2gtk-4.1。
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [dev]
+    paths:
+      - '.github/workflows/steam-frame-appimage.yml'
+      - 'steam-frame/**'
+
+permissions:
+  contents: write
+
+jobs:
+  # ---------------------------------------------------------------- 推荐产物
+  installer-bundle:
+    name: 打包一键安装器
+    # 原生 arm64 runner：为了取到 aarch64 版的托盘库
+    runs-on: ubuntu-22.04-arm
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: 校验安装器语法
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+          bash -n steam-frame/install-clash-verge-frame.sh
+          shellcheck --severity=error steam-frame/install-clash-verge-frame.sh \
+            || echo "::warning::shellcheck 报错，请检查"
+
+      - name: 收集托盘库
+        run: |
+          sudo apt-get install -y libayatana-appindicator3-1 libayatana-indicator3-7
+          mkdir -p steam-frame/payload/lib
+          cp -av /usr/lib/aarch64-linux-gnu/libayatana-appindicator3.so* steam-frame/payload/lib/
+          cp -av /usr/lib/aarch64-linux-gnu/libayatana-indicator3.so*        steam-frame/payload/lib/
+          ls -la steam-frame/payload/lib/
+
+      - name: 打包
+        run: |
+          tar -czf clash-verge-steam-frame-installer.tar.gz \
+            steam-frame/install-clash-verge-frame.sh \
+            steam-frame/README.md \
+            steam-frame/payload
+          sha256sum clash-verge-steam-frame-installer.tar.gz > SHA256SUMS.txt
+          tar -tzf clash-verge-steam-frame-installer.tar.gz | head -20
+          ls -lh clash-verge-steam-frame-installer.tar.gz
+
+      - name: 上传产物
+        uses: actions/upload-artifact@v7
+        with:
+          name: clash-verge-steam-frame-installer
+          path: |
+            clash-verge-steam-frame-installer.tar.gz
+            SHA256SUMS.txt
+          if-no-files-found: error
+
+      - name: 发布 Release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: steam-frame-latest
+          name: Clash Verge Rev — Steam Frame (ARM64)
+          body: |
+            Valve Steam Frame（Snapdragon 8 Gen 3 / AArch64 / SteamOS）适配产物。
+
+            **推荐**：`clash-verge-steam-frame-installer.tar.gz`
+
+            ```bash
+            tar -xzf clash-verge-steam-frame-installer.tar.gz
+            cd steam-frame
+            chmod +x install-clash-verge-frame.sh
+            ./install-clash-verge-frame.sh
+            ```
+
+            安装器会自动补齐 webkit2gtk-4.1、把程序装进 `~/.local`、注册桌面项，
+            并调用 `steamos-add-to-steam` 把它加进 Steam Frame 的库。
+
+            详见包内 `README.md`。
+          files: |
+            clash-verge-steam-frame-installer.tar.gz
+            SHA256SUMS.txt
+          draft: false
+
+  # ---------------------------------------------------------------- 额外产物
+  appimage:
+    name: 构建 ARM64 AppImage
+    runs-on: ubuntu-22.04-arm
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: 安装系统依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config curl wget file ca-certificates \
+            libssl-dev libgtk-3-dev libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev librsvg2-dev patchelf \
+            libxdo-dev squashfs-tools desktop-file-utils zsync
+          sudo apt-get install -y --no-install-recommends libfuse2 \
+            || sudo apt-get install -y --no-install-recommends libfuse2t64
+
+      - name: 安装 Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24.21.0'
+
+      - name: 安装 pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          run_install: false
+
+      - name: 安装 Rust
+        uses: dtolnay/rust-toolchain@1.99.0
+        with:
+          targets: aarch64-unknown-linux-gnu
+
+      - name: Rust 缓存
+        uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: 'v1-rust'
+          key: 'steam-frame-aarch64-unknown-linux-gnu'
+          workspaces: |
+            . -> target
+          save-if: true
+
+      - name: 安装依赖与 sidecar
+        run: |
+          pnpm i
+          pnpm run prebuild aarch64-unknown-linux-gnu
+
+      - name: 构建 AppImage
+        env:
+          # linuxdeploy 自身也是 AppImage，runner 上不保证能挂载 FUSE
+          APPIMAGE_EXTRACT_AND_RUN: '1'
+          NODE_OPTIONS: '--max_old_space_size=4096'
+        run: |
+          pnpm build \
+            --target aarch64-unknown-linux-gnu \
+            --config "$PWD/steam-frame/tauri.appimage.conf.json"
+
+      - name: 收集
+        run: |
+          mkdir -p out
+          cp target/aarch64-unknown-linux-gnu/release/bundle/appimage/*.AppImage out/
+          sha256sum out/*.AppImage > out/SHA256SUMS-appimage.txt
+          ls -lh out/
+
+      - name: 上传产物
+        uses: actions/upload-artifact@v7
+        with:
+          name: clash-verge-steam-frame-appimage
+          path: |
+            out/*.AppImage
+            out/SHA256SUMS-appimage.txt
+          if-no-files-found: error
+
+      - name: 追加到 Release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: steam-frame-latest
+          files: |
+            out/*.AppImage
+            out/SHA256SUMS-appimage.txt
