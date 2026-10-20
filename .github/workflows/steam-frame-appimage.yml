@@ -305,6 +305,9 @@ jobs:
   release-zip:
     name: 打包离线 zip 发放包
     needs: [windows-manager]
+    # Windows runner 偶尔排不上队，排队超时会被取消（表现为零步骤 cancelled）。
+    # 那不该连带跳过整个 zip 发布，所以这里 always()，exe 用已发布的副本兜底。
+    if: always()
     runs-on: ubuntu-22.04-arm
     env:
       ZIP_VERSION: v1.1
@@ -323,10 +326,30 @@ jobs:
           zip -v | head -2
 
       - name: 取 Windows 管理器产物
+        continue-on-error: true
         uses: actions/download-artifact@v7
         with:
           name: clash-verge-steam-frame-windows-manager
           path: artifacts/windows
+
+      - name: 补齐 exe
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/windows release-extra
+          if [ -f artifacts/windows/ClashVergeFrameManager.exe ] \
+             && [ -f artifacts/windows/cvframe-cli.exe ]; then
+            echo "使用本次运行编译的 exe"
+          else
+            # Windows 作业被取消时的兜底：manager.cs 没变，已发布副本就是同一份二进制。
+            echo "::warning::本次运行没有 Windows 产物，回退到已发布副本"
+            BASE="https://github.com/dhies23/clash-verge-steamframe/releases/download/steam-frame-latest"
+            for f in ClashVergeFrameManager.exe cvframe-cli.exe; do
+              curl -fL --retry 3 -o "artifacts/windows/$f" "$BASE/$f"
+            done
+            # 兜底时才由本作业补发独立 exe，避免和 windows-manager 作业重复上传
+            cp artifacts/windows/ClashVergeFrameManager.exe artifacts/windows/cvframe-cli.exe release-extra/
+          fi
+          ls -la artifacts/windows/
 
       - name: 组装载荷 app 与 lib
         run: |
@@ -436,3 +459,6 @@ jobs:
           files: |
             ClashVerge-SteamFrame-*.zip
             SHA256SUMS-zip.txt
+            release-extra/*
+          # 兜底目录通常是空的，空 glob 不该算失败
+          fail_on_unmatched_files: false
