@@ -290,3 +290,144 @@ jobs:
             steam-frame/ClashVergeFrameManager.exe
             steam-frame/cvframe-cli.exe
             steam-frame/SHA256SUMS-windows.txt
+
+  # ---------------------------------------------------------------- 离线 zip 发放包
+  # 面向最终用户的单一下载：Windows 管理器 + 离线自解压安装器 + 脚本 + 文档。
+  #
+  # 载荷（app/ lib/ webkit/）在 runner 上现场拉取后塞进 .run 的 __PAYLOAD_BELOW__
+  # 之后，所以既不占 git 空间，也不会触及 GitHub 的 100 MB 单文件限制。
+  # webkit 的版本号不写死：直接读仓库数据库里的 FILENAME，与 pacman 的解析结果一致。
+  release-zip:
+    name: 打包离线 zip 发放包
+    needs: [windows-manager]
+    runs-on: ubuntu-22.04-arm
+    env:
+      ZIP_VERSION: v1.1
+      STEAMOS_REPO: https://holo-packages.steamos.cloud/archlinux-deckard/archlinux/main
+      WEBKIT_PKGS: webkit2gtk-4.1 harfbuzz-icu hyphen libmanette libwpe woff2 wpebackend-fdo
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: 安装工具与托盘库
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            curl zstd zip libayatana-appindicator3-1 libayatana-indicator3-7
+          zstd --version
+          zip -v | head -2
+
+      - name: 取 Windows 管理器产物
+        uses: actions/download-artifact@v7
+        with:
+          name: clash-verge-steam-frame-windows-manager
+          path: artifacts/windows
+
+      - name: 组装载荷 app 与 lib
+        run: |
+          set -euo pipefail
+          mkdir -p payload/app payload/lib payload/webkit
+
+          # SteamOS 仓库和 AUR 都没有 aarch64 的 libayatana-appindicator，
+          # 托盘库只能从 Ubuntu arm64 取现成的二进制。
+          cp -a /usr/lib/aarch64-linux-gnu/libayatana-appindicator3.so* payload/lib/
+          cp -a /usr/lib/aarch64-linux-gnu/libayatana-indicator3.so*        payload/lib/
+          ls -la payload/lib/
+
+          # 程序本体：上游最新 arm64 deb
+          REL_JSON="$(curl -fsSL -H "Authorization: Bearer ${{ github.token }}" \
+            https://api.github.com/repos/clash-verge-rev/clash-verge-rev/releases/latest)"
+          DEB_URL="$(printf '%s' "$REL_JSON" | grep -oE 'https://[^"]+_arm64\.deb' | head -1)"
+          [ -n "$DEB_URL" ] || { echo "::error::上游 release 里找不到 arm64.deb"; exit 1; }
+          echo "上游安装包：$(basename "$DEB_URL")"
+          curl -fL --retry 3 --max-time 900 -o "payload/app/$(basename "$DEB_URL")" "$DEB_URL"
+          ls -la payload/app/
+
+      - name: 组装载荷 webkit
+        run: |
+          set -euo pipefail
+          DB="$(mktemp)"
+          DB_DIR="$(mktemp -d)"
+          curl -fsSL --retry 3 -o "$DB" "$STEAMOS_REPO/extra/os/aarch64/extra.db"
+          tar -xf "$DB" -C "$DB_DIR"
+
+          # 逐个 desc 里读 NAME/FILENAME，比通配符匹配稳
+          : > files.txt
+          for d in "$DB_DIR"/*/; do
+            [ -f "$d/desc" ] || continue
+            n="$(sed -n '/^%NAME%$/{n;p;q}' "$d/desc")"
+            case " $WEBKIT_PKGS " in
+              *" $n "*)
+                fn="$(sed -n '/^%FILENAME%$/{n;p;q}' "$d/desc")"
+                [ -n "$fn" ] && echo "$fn" >> files.txt
+                ;;
+            esac
+          done
+
+          echo "解析到 $(wc -l < files.txt) 个包："
+          sort files.txt
+          [ -s files.txt ] || { echo "::error::没解析到任何 webkit 包"; exit 1; }
+
+          while read -r fn; do
+            curl -fsSL --retry 3 --max-time 600 \
+              -o "payload/webkit/$fn" "$STEAMOS_REPO/extra/os/aarch64/$fn"
+          done < files.txt
+
+          ls -la payload/webkit/
+          # 至少要拿到 webkit2gtk-4.1 本身，否则离线载荷没有意义
+          ls payload/webkit/webkit2gtk-4.1-*.pkg.tar.* >/dev/null 2>&1 \
+            || { echo "::error::没拿到 webkit2gtk-4.1 包"; exit 1; }
+          [ "$(wc -l < files.txt)" -eq 7 ] \
+            || echo "::warning::期望 7 个 webkit 包，实际 $(wc -l < files.txt) 个"
+
+      - name: 生成自解压安装器
+        run: |
+          set -euo pipefail
+          tar --zstd -cf payload.tar.zst -C payload app lib webkit
+          # install-clash-verge-frame.sh 末尾自带 __PAYLOAD_BELOW__ 标记
+          cat steam-frame/install-clash-verge-frame.sh payload.tar.zst > install-clash-verge-frame.run
+          chmod +x install-clash-verge-frame.run
+          grep -aq '^__PAYLOAD_BELOW__$' install-clash-verge-frame.run \
+            || { echo "::error::缺少 __PAYLOAD_BELOW__ 标记"; exit 1; }
+          ls -lh install-clash-verge-frame.run
+
+      - name: 组装 zip
+        run: |
+          set -euo pipefail
+          D="ClashVerge-SteamFrame-${ZIP_VERSION}"
+          mkdir -p "$D"
+          cp artifacts/windows/ClashVergeFrameManager.exe artifacts/windows/cvframe-cli.exe "$D/"
+          cp install-clash-verge-frame.run "$D/"
+          cp steam-frame/push-subscription.py steam-frame/steam-shortcuts.py \
+             steam-frame/uninstall-clash-verge-frame.sh "$D/"
+          cp steam-frame/gui-screenshot.png "$D/"
+          cp "steam-frame/快速开始.md" "$D/"
+          cp README.md "$D/README.md"
+          (
+            cd "$D"
+            sha256sum ClashVergeFrameManager.exe cvframe-cli.exe install-clash-verge-frame.run \
+                      push-subscription.py steam-shortcuts.py uninstall-clash-verge-frame.sh \
+                      README.md 快速开始.md gui-screenshot.png > SHA256SUMS.txt
+            cat SHA256SUMS.txt
+          )
+          zip -r -1 "${D}.zip" "$D"
+          ls -lh "${D}.zip"
+          sha256sum "${D}.zip" > SHA256SUMS-zip.txt
+          cat SHA256SUMS-zip.txt
+
+      - name: 上传产物
+        uses: actions/upload-artifact@v7
+        with:
+          name: clash-verge-steam-frame-zip
+          path: |
+            ClashVerge-SteamFrame-*.zip
+            SHA256SUMS-zip.txt
+          if-no-files-found: error
+
+      - name: 发布 Release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: steam-frame-latest
+          files: |
+            ClashVerge-SteamFrame-*.zip
+            SHA256SUMS-zip.txt
