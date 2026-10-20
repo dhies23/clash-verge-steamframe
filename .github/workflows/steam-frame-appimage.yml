@@ -74,24 +74,29 @@ jobs:
       - name: 发布 Release
         uses: softprops/action-gh-release@v3
         with:
-          tag_name: steam-frame-latest
-          name: Clash Verge Rev — Steam Frame (ARM64)
+          tag_name: steam-frame-v1.1
+          name: Clash Verge Rev — Steam Frame (ARM64) v1.1
           body: |
-            Valve Steam Frame（Snapdragon 8 Gen 3 / AArch64 / SteamOS）适配产物。
+            Valve Steam Frame（Snapdragon 8 Gen 3 / AArch64 / SteamOS）适配产物 —— **v1.1**。
 
-            **推荐**：`clash-verge-steam-frame-installer.tar.gz`
+            **推荐**：`ClashVerge-SteamFrame-v1.1.zip`
 
-            ```bash
-            tar -xzf clash-verge-steam-frame-installer.tar.gz
-            cd steam-frame
-            chmod +x install-clash-verge-frame.sh
-            ./install-clash-verge-frame.sh
-            ```
+            解压后有两种用法：
 
-            安装器会自动补齐 webkit2gtk-4.1、把程序装进 `~/.local`、注册桌面项，
-            并调用 `steamos-add-to-steam` 把它加进 Steam Frame 的库。
+            * Windows 上运行 `ClashVergeFrameManager.exe`，用 SSH 把程序部署到机器
+            * 或把整个目录拷进 Frame，执行 `./install-clash-verge-frame.run`
 
-            详见包内 `README.md`。
+            zip 内自带离线载荷（上游 arm64.deb + webkit2gtk-4.1 及其依赖 + 托盘库），
+            目标机断网也能安装。安装器会自动补齐运行时依赖、把程序装进 `~/.local`、
+            注册桌面项，并调用 `steamos-add-to-steam` 加进 Steam 库。
+
+            其余产物：
+
+            * `ClashVergeFrameManager.exe` / `cvframe-cli.exe`：Windows 管理器（GUI / CLI）
+            * `clash-verge-steam-frame-installer.tar.gz`：只有安装器和托盘库，安装时联网取 deb
+            * `Clash.Verge_*_aarch64.AppImage`：单文件版，要求系统自带 webkit2gtk-4.1
+
+            详见 zip 内的 `README.md` 与 `快速开始.md`。
           files: |
             clash-verge-steam-frame-installer.tar.gz
             SHA256SUMS.txt
@@ -175,7 +180,7 @@ jobs:
       - name: 追加到 Release
         uses: softprops/action-gh-release@v3
         with:
-          tag_name: steam-frame-latest
+          tag_name: steam-frame-v1.1
           files: |
             out/*.AppImage
             out/SHA256SUMS-appimage.txt
@@ -285,7 +290,7 @@ jobs:
       - name: 追加到 Release
         uses: softprops/action-gh-release@v3
         with:
-          tag_name: steam-frame-latest
+          tag_name: steam-frame-v1.1
           files: |
             steam-frame/ClashVergeFrameManager.exe
             steam-frame/cvframe-cli.exe
@@ -427,7 +432,7 @@ jobs:
       - name: 发布 Release
         uses: softprops/action-gh-release@v3
         with:
-          tag_name: steam-frame-latest
+          tag_name: steam-frame-v1.1
           files: |
             ClashVerge-SteamFrame-*.zip
             SHA256SUMS-zip.txt
